@@ -1,0 +1,122 @@
+-- 1.1. Check the number of rows and columns (by counting rows and listing columns)
+SELECT COUNT(*) AS total_transactions,
+       (SELECT COUNT(*) FROM pragma_table_info('transactions')) AS number_of_columns
+FROM transactions;
+
+-- 1.2. Preview the first 5 rows to understand the data structure
+SELECT * FROM transactions LIMIT 5;
+
+-- 1.3. Check the data types of each column (Crucial for SQL operations)
+SELECT name AS column_name, type AS data_type
+FROM pragma_table_info('transactions');
+
+-- 1.4. Analyze the target variable: Class distribution
+SELECT
+    Class,
+    COUNT(*) AS count,
+    ROUND(COUNT(*) * 100.0 / (SELECT COUNT(*) FROM transactions), 2) AS percentage
+FROM transactions
+GROUP BY Class;
+
+-- 2.1. Check for missing (NULL) values in all columns
+SELECT
+    COUNT(*) - COUNT(Time) AS missing_Time,
+    COUNT(*) - COUNT(V1) AS missing_V1,
+    -- ... Repeat for V2 to V28 ...
+    COUNT(*) - COUNT(Amount) AS missing_Amount,
+    COUNT(*) - COUNT(Class) AS missing_Class
+FROM transactions;
+
+-- 2.2. Check for duplicate rows (all columns identical)
+SELECT COUNT(*) AS duplicate_rows
+FROM (
+    SELECT *, COUNT(*) AS count
+    FROM transactions
+    GROUP BY Time, V1, V2, V3, V4, V5, V6, V7, V8, V9, V10,
+             V11, V12, V13, V14, V15, V16, V17, V18, V19, V20,
+             V21, V22, V23, V24, V25, V26, V27, V28, Amount, Class
+    HAVING count > 1
+);
+
+-- 3.1. Summary statistics for Amount (for all transactions)
+SELECT
+    MIN(Amount) AS min_amount,
+    MAX(Amount) AS max_amount,
+    AVG(Amount) AS avg_amount,
+    ROUND(CAST(PERCENTILE_CONT(0.5) WITHIN GROUP (ORDER BY Amount) AS REAL), 2) AS median_amount,
+    ROUND(CAST(PERCENTILE_CONT(0.75) WITHIN GROUP (ORDER BY Amount) AS REAL), 2) AS q3_amount
+FROM transactions;
+
+-- 3.2. Compare Amount statistics by Class (Fraud vs. Normal)
+SELECT
+    Class,
+    COUNT(*) AS count,
+    MIN(Amount) AS min_amount,
+    MAX(Amount) AS max_amount,
+    AVG(Amount) AS avg_amount,
+    ROUND(CAST(PERCENTILE_CONT(0.5) WITHIN GROUP (ORDER BY Amount) AS REAL), 2) AS median_amount
+FROM transactions
+GROUP BY Class;
+
+-- 3.3. Convert Time from seconds to hours and analyze transaction frequency
+SELECT
+    (Time / 3600) % 24 AS hour_of_day,
+    COUNT(*) AS total_transactions,
+    SUM(Class) AS fraudulent_transactions,
+    ROUND(SUM(Class) * 100.0 / COUNT(*), 3) AS fraud_rate_per_hour
+FROM transactions
+GROUP BY hour_of_day
+ORDER BY hour_of_day;
+
+-- 3.4. Compare the average value of each feature by Class
+-- This identifies which features are most strongly associated with fraud.
+
+SELECT
+    'V1' AS feature, AVG(CASE WHEN Class=1 THEN V1 END) AS avg_fraud, AVG(CASE WHEN Class=0 THEN V1 END) AS avg_normal
+    FROM transactions
+UNION ALL SELECT 'V2', AVG(CASE WHEN Class=1 THEN V2 END), AVG(CASE WHEN Class=0 THEN V2 END) FROM transactions
+UNION ALL SELECT 'V3', AVG(CASE WHEN Class=1 THEN V3 END), AVG(CASE WHEN Class=0 THEN V3 END) FROM transactions
+-- ... Repeat this pattern for V4 to V28 ...
+UNION ALL SELECT 'V28', AVG(CASE WHEN Class=1 THEN V28 END), AVG(CASE WHEN Class=0 THEN V28 END) FROM transactions
+UNION ALL SELECT 'Amount', AVG(CASE WHEN Class=1 THEN Amount END), AVG(CASE WHEN Class=0 THEN Amount END) FROM transactions
+ORDER BY ABS(avg_fraud - avg_normal) DESC; -- Order by the magnitude of difference
+
+-- 4.1. Create a view that flags transactions based on extreme values in key features
+CREATE VIEW flagged_transactions AS
+SELECT
+    *,
+    CASE
+        WHEN V14 < -10 THEN 1 -- Extremely low V14
+        WHEN V17 < -5 THEN 1  -- Extremely low V17
+        WHEN V12 < -8 THEN 1  -- Extremely low V12
+        WHEN V4 > 2.5 THEN 1  -- Extremely high V4
+        WHEN V11 > 2 THEN 1   -- Extremely high V11
+        ELSE 0
+    END AS rule_based_flag
+FROM transactions;
+
+-- 4.2. Evaluate the performance of this simple rule-based system
+SELECT
+    Class AS actual_class,
+    rule_based_flag AS predicted_class,
+    COUNT(*) AS number_of_transactions
+FROM flagged_transactions
+GROUP BY Class, rule_based_flag
+ORDER BY Class, rule_based_flag;
+
+-- 4.3. Calculate Precision: Of all transactions we flagged, how many were actually fraud?
+SELECT
+    ROUND(
+        SUM(CASE WHEN Class = 1 AND rule_based_flag = 1 THEN 1 ELSE 0 END) * 100.0 /
+        SUM(CASE WHEN rule_based_flag = 1 THEN 1 ELSE 0 END),
+    2) AS precision_percentage
+FROM flagged_transactions;
+
+-- 4.4. Calculate Recall: Of all actual fraud transactions, how many did we catch?
+SELECT
+    ROUND(
+        SUM(CASE WHEN Class = 1 AND rule_based_flag = 1 THEN 1 ELSE 0 END) * 100.0 /
+        SUM(CASE WHEN Class = 1 THEN 1 ELSE 0 END),
+    2) AS recall_percentage
+FROM flagged_transactions;
+
